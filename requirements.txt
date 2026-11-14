@@ -1,0 +1,6 @@
+fonttools>=4.40
+brotli
+shapely>=2.0
+numpy
+Hershey-Fonts
+pillow
