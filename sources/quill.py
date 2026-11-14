@@ -48,9 +48,23 @@ def _dedupe(pts):
         if np.linalg.norm(p-out[-1])>0.5: out.append(p)
     return np.array(out) if len(out)>1 else np.array([pts[0], pts[0]+[1,0]])
 
+def _chaikin(pts, deg):
+    # 对非转角顶点做一次切角，让粗糙的折线骨架更圆
+    n=len(pts)
+    if n<3: return pts
+    closed = np.linalg.norm(pts[0]-pts[-1])<1.0
+    out=[pts[0]]
+    for i in range(1,n-1):
+        a=pts[i]-pts[i-1]; b=pts[i+1]-pts[i]; la,lb=np.linalg.norm(a),np.linalg.norm(b)
+        ang=math.degrees(math.acos(np.clip(a.dot(b)/(la*lb+1e-9),-1,1)))
+        if ang>deg or ang<3: out.append(pts[i])
+        else: out += [pts[i]-a*0.25, pts[i]+b*0.25]
+    out.append(pts[-1]); return np.array(out)
+
 def stroke_poly(median, P=P, wscale=1.0, plain=False):
     """median: list of (x,y) 字体坐标(y向上)。返回 shapely 多边形"""
     pts = _dedupe(np.array(median, float))
+    for _ in range(P.get('CHAIKIN',0)): pts = _chaikin(pts, P['CORNER'])
     length = float(np.sum(np.linalg.norm(np.diff(pts,axis=0),axis=1)))
     parts = _split_corners(pts, P['CORNER'])
     path = np.vstack([_catmull(s, P['STEP'])[(0 if i==0 else 1):] for i,s in enumerate(parts)])

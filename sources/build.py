@@ -6,8 +6,10 @@ from shapely.geometry.polygon import orient
 import quill
 
 HERE=os.path.dirname(os.path.abspath(__file__)); ROOT=os.path.dirname(HERE)
-DATA=os.environ.get('MMH_GRAPHICS', os.path.join(HERE,'data','graphics.txt'))
-VERSION='1.100'
+DATADIR=os.environ.get('GQK_DATA', os.path.join(HERE,'data'))
+# 骨架数据，按优先级排列：同一个字只取最先出现的那份
+DATAFILES=['graphics.txt','graphicsZhHans.txt','graphicsZhHant.txt','graphicsJa.txt','graphicsKo.txt','graphicsJaKana.txt']
+VERSION='1.200'
 FAMILY_EN, FAMILY_ZH, PS = 'Goosequill Kai', '鹅管楷', 'GoosequillKai'
 WEIGHTS = {   # 笔宽 W / 笔尖厚 T / 密字减细斜率 / OS2 字重
  'Light':   dict(W=54,  T=15, slope=0.014, floor=0.78, cls=300),
@@ -62,15 +64,44 @@ def draw(pen, c):
     if offs: pen.qCurveTo(*offs, c[0][:2])
     pen.closePath()
 
-def do_hanzi(line):
-    j=json.loads(line); meds=[quill.mmh_to_font(m) for m in j['medians']]
-    return j['character'], to_contours(quill.glyph_poly(meds, quill.P, wscale_for(len(meds)))), 1000
+def is_kana(ch): return 0x3040<=ord(ch)<=0x30ff
+def clean_kana(medians):
+    """AnimCJK 的假名骨架为动画做过处理：自相交的笔画被复制成多段、起笔前多一个引导点。这里还原成一笔一线。"""
+    out=[]
+    for m in medians:
+        m=[tuple(p) for p in m]
+        if any(len(o)>=3 and len(m)>=3 and o[-3:]==m[-3:] for o in out): continue
+        if len(m)>=3:
+            (x0,y0),(x1,y1),(x2,y2)=m[:3]; l=math.hypot(x1-x0,y1-y0)
+            a=(x1-x0,y1-y0); c=(x2-x1,y2-y1); lc=math.hypot(*c)
+            turn=math.degrees(math.acos(max(-1,min(1,(a[0]*c[0]+a[1]*c[1])/(l*lc+1e-9)))))
+            if l<120 and turn>25: m=m[1:]
+        out.append(m)
+    return out
+
+def do_hanzi(item):
+    ch, medians = item; kana=is_kana(ch)
+    if kana: medians=clean_kana(medians)
+    meds=[quill.mmh_to_font(m) for m in medians if len(m)>1]
+    ws = 1.04 if kana else wscale_for(len(meds))
+    return ch, to_contours(quill.glyph_poly(meds, quill.P, ws, kana)), 1000
+
+def load_skeletons(only=None):
+    seen={}
+    for fn in DATAFILES:
+        p=os.path.join(DATADIR,fn)
+        if not os.path.exists(p): print('missing data file:',fn); continue
+        for l in open(p,encoding='utf8'):
+            if not l.strip(): continue
+            j=json.loads(l); ch=j['character']
+            if len(ch)==1 and ch not in seen and (not only or ch in only): seen[ch]=j['medians']
+    return list(seen.items())
 
 # ---------- 西文：Hershey Simplex 单线骨架，同一支笔 ----------
 def latin():
     from HersheyFonts import HersheyFonts
     hf=HersheyFonts(); hf.load_default_font('futural'); K=700/21; res=[]
-    LP=dict(quill.P, CORNER=75, W=quill.P['W']*1.12, T=quill.P['T']*0.86)
+    LP=dict(quill.P, CORNER=75, CHAIKIN=2, W=quill.P['W']*1.12, T=quill.P['T']*0.86)
     for code in range(0x21,0x7f):
         ch=chr(code); gl=hf.all_glyphs.get(ch)
         if gl is None: continue
@@ -105,22 +136,65 @@ PUNCT = {
  '～':[[(100,320)]+arc(300,330,130,70,170,10,8)+arc(700,350,130,70,190,350,8)+[(900,370)]],
  '　':[],
 }
+def seg(*p): return list(p)
+SYMBOLS = {   # 字符: (骨架, 字宽)
+ '×':([seg((110,560),(490,180)),seg((490,560),(110,180))],600),
+ '÷':([seg((90,370),(510,370)),dot(300,560),dot(300,180)],600),
+ '±':([seg((90,430),(510,430)),seg((300,630),(300,230)),seg((90,110),(510,110))],600),
+ '°':([arc(200,600,90,90,100,460,16)],400),
+ '¥':([seg((90,700),(300,400)),seg((510,700),(300,400)),seg((300,400),(300,0)),seg((110,330),(490,330)),seg((110,190),(490,190))],600),
+ '•':([arc(300,350,45,45,100,460,12)],600),
+ '→':([seg((90,340),(900,340)),seg((680,540),(910,340),(680,140))],1000),
+ '←':([seg((910,340),(100,340)),seg((320,540),(90,340),(320,140))],1000),
+ '↑':([seg((500,-60),(500,750)),seg((300,530),(500,760),(700,530))],1000),
+ '↓':([seg((500,750),(500,-60)),seg((300,170),(500,-70),(700,170))],1000),
+ '〇':([arc(500,380,330,380,100,460,28)],1000),
+}
+CX, CY = 500, 380   # 字框中心
+def rot(st):  return [[(CX+(y-CY), CY-(x-CX)) for x,y in s] for s in st]      # 顺时针 90°
+def shift(st,dx,dy): return [[(x+dx,y+dy) for x,y in s] for s in st]
+# 竖排形式：横排字符 -> (竖排码位或 None, 变换)
+VERT = {
+ '，':('\ufe10', lambda s: shift(s,560,560)), '、':('\ufe11', lambda s: shift(s,560,560)),
+ '。':('\ufe12', lambda s: shift(s,560,560)), '：':('\ufe13', lambda s: shift(s,300,150)),
+ '；':('\ufe14', lambda s: shift(s,300,150)), '！':('\ufe15', lambda s: shift(s,300,0)),
+ '？':('\ufe16', lambda s: shift(s,250,0)),
+ '—':('\ufe31', rot), '…':('\ufe19', rot), '～':(None, rot),
+ '（':('\ufe35', rot), '）':('\ufe36', rot), '【':('\ufe3b', rot), '】':('\ufe3c', rot),
+ '《':('\ufe3d', rot), '》':('\ufe3e', rot), '〈':('\ufe3f', rot), '〉':('\ufe40', rot),
+ '「':('\ufe41', rot), '」':('\ufe42', rot), '『':('\ufe43', rot), '』':('\ufe44', rot),
+}
 def punct():
     PP=dict(quill.P, CORNER=75)
-    return [(ch, to_contours(quill.glyph_poly(st, PP, 1.12, True)) if st else [], 1000) for ch,st in PUNCT.items()]
+    mk=lambda st: to_contours(quill.glyph_poly(st, PP, 1.12, True)) if st else []
+    res=[(ch, mk(st), 1000) for ch,st in PUNCT.items()]
+    res+=[(ch, mk(st), adv) for ch,(st,adv) in SYMBOLS.items()]
+    vert=[(ch, code, mk(f(PUNCT[ch]))) for ch,(code,f) in VERT.items()]
+    return res, vert
 
 def build(weight, only=None):
     from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.ttGlyphPen import TTGlyphPen
     setw(weight); t=time.time()
-    lines=[l for l in open(DATA,encoding='utf8').read().splitlines() if not only or json.loads(l)['character'] in only]
-    with Pool(initializer=setw, initargs=(weight,)) as pool: han=pool.map(do_hanzi, lines, chunksize=40)
-    glyphs={ch:(c,adv) for ch,c,adv in han+punct()}
+    items=load_skeletons(only)
+    with Pool(initializer=setw, initargs=(weight,)) as pool: han=pool.map(do_hanzi, items, chunksize=40)
+    pun, vert = punct()
+    glyphs={ch:(c,adv) for ch,c,adv in han+pun}
+    vsub={}   # 横排字符 -> 竖排字形名
+    kana_bar='ー'
+    if any(ch==kana_bar for ch,_ in items):
+        med=dict(items)[kana_bar]
+        vert.append((kana_bar, None, to_contours(quill.glyph_poly(rot([quill.mmh_to_font(m) for m in clean_kana(med)]), quill.P, 0.94, True))))
     for ch,c,adv in latin():
         glyphs[ch]=(c,adv); fw=chr(ord(ch)+0xFEE0)
         if fw not in glyphs:
             dx=(1000-adv)//2; glyphs[fw]=([[(x+dx,y,o) for x,y,o in k] for k in c],1000)
-    glyphs[' ']=([],300); glyphs[' ']=([],300)
+    glyphs[' ']=([],300); glyphs[chr(0xa0)]=([],300)
+    uname=lambda ch: 'uni%04X'%ord(ch) if ord(ch)<0x10000 else 'u%05X'%ord(ch)
+    extra={}   # 无码位的竖排字形
+    for ch,code,c in vert:
+        if code: glyphs[code]=(c,1000); vsub[uname(ch)]=uname(code)
+        else: extra[uname(ch)+'.vert']=(c,1000); vsub[uname(ch)]=uname(ch)+'.vert'
     order=['.notdef']; cmap={}; gl={}; met={}
     pen=TTGlyphPen(None)
     for c in ([(100,0),(100,700),(500,700),(500,0)],[(160,60),(440,60),(440,640),(160,640)]):
@@ -128,19 +202,23 @@ def build(weight, only=None):
     gl['.notdef']=pen.glyph(); met['.notdef']=(600,100)
     empty=[]
     for ch,(cs,adv) in sorted(glyphs.items()):
-        name='uni%04X'%ord(ch) if ord(ch)<0x10000 else 'u%05X'%ord(ch)
+        name=uname(ch)
         pen=TTGlyphPen(None)
         for c in cs: draw(pen,c)
         gl[name]=pen.glyph(); order.append(name); cmap[ord(ch)]=name
         met[name]=(adv, min((x for c in cs for x,_,_ in c), default=0))
         if not cs and not ch.isspace(): empty.append(ch)
+    for name,(cs,adv) in extra.items():
+        pen=TTGlyphPen(None)
+        for c in cs: draw(pen,c)
+        gl[name]=pen.glyph(); order.append(name); met[name]=(adv, min((x for c in cs for x,_,_ in c), default=0))
     fb=FontBuilder(1000,isTTF=True); fb.setupGlyphOrder(order); fb.setupCharacterMap(cmap)
     fb.setupGlyf(gl); fb.setupHorizontalMetrics(met); fb.setupHorizontalHeader(ascent=928,descent=-256)
     ribbi = weight in ('Regular','Bold')
     fam1 = FAMILY_EN if ribbi else f'{FAMILY_EN} {weight}'; sty1 = weight if ribbi else 'Regular'
     names=dict(familyName=fam1, styleName=sty1, uniqueFontIdentifier=f'{PS}-{weight}-{VERSION}',
         fullName=f'{FAMILY_EN} {weight}', psName=f'{PS}-{weight}', version=f'Version {VERSION}',
-        copyright='Glyph outlines generated by the Goosequill Kai project. Hanzi stroke skeletons derived from Make Me a Hanzi (c) Shaunak Kishore, which is derived from Arphic PL KaitiM GB and Arphic PL UKai (c) Arphic Technology Co., Ltd. Latin skeletons: Hershey Simplex.',
+        copyright='Glyph outlines generated by the Goosequill Kai project. Hanzi and kana stroke skeletons derived from Make Me a Hanzi (c) Shaunak Kishore and AnimCJK (c) FM-SH, which are derived from Arphic PL KaitiM GB, Arphic PL KaitiM Big5 and Arphic PL UKai (c) Arphic Technology Co., Ltd. Latin skeletons: Hershey Simplex.',
         designer='The Goosequill Kai Project Authors',
         description='Hanzi rewritten with a simulated slanted broad-nib goose quill.',
         licenseDescription='This font is distributed under the Arphic Public License.',
@@ -153,9 +231,19 @@ def build(weight, only=None):
     if not ribbi: nm.setName(FAMILY_ZH,16,3,1,0x804); nm.setName(weight,17,3,1,0x804)
     fb.setupOS2(sTypoAscender=880,sTypoDescender=-120,sTypoLineGap=0,usWinAscent=1032,usWinDescent=285,
         sxHeight=467,sCapHeight=700,achVendID='GQKI',fsType=0,usWeightClass=CUR['cls'],
-        fsSelection=(0x20 if weight=='Bold' else 0x40), ulCodePageRange1=(1<<18)|1, ulUnicodeRange2=(1<<27))
+        fsSelection=(0x20 if weight=='Bold' else 0x40), ulCodePageRange1=(1<<18)|(1<<17)|1, ulUnicodeRange2=(1<<27)|(1<<17)|(1<<18))
     fb.font['head'].macStyle = 1 if weight=='Bold' else 0
     fb.setupPost()
+    # 竖排：vhea / vmtx + vert 特性
+    glyf=fb.font['glyf']; vm={}
+    for n in order:
+        g=glyf[n]; ymax=getattr(g,'yMax',None)
+        vm[n]=(1000, 880-(ymax if ymax is not None and g.numberOfContours else 880))
+    fb.setupVerticalHeader(ascent=500, descent=-500); fb.setupVerticalMetrics(vm)
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    subs=''.join(f'  sub {a} by {b};\n' for a,b in sorted(vsub.items()) if a in gl and b in gl)
+    fea='languagesystem DFLT dflt;\nlanguagesystem hani dflt;\nlanguagesystem kana dflt;\nlanguagesystem latn dflt;\n'+f'feature vert {{\n{subs}}} vert;\nfeature vrt2 {{\n{subs}}} vrt2;\n'
+    addOpenTypeFeaturesFromString(fb.font, fea)
     out=os.path.join(ROOT,'fonts','TTF',f'{PS}-{weight}.ttf'); fb.save(out)
     try:
         from fontTools.ttLib import TTFont

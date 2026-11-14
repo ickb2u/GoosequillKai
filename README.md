@@ -26,17 +26,20 @@ An open-source Chinese typeface whose every stroke is re-written by a simulated 
 
 `fonts/WOFF2/` 下是对应的网页字体。
 
-- 汉字 9574 个（简体常用字、部分繁体字与部首），来自 Make Me a Hanzi 的收字范围；
-- ASCII 拉丁字母、数字、符号及其全角形式；
-- 常用中文标点：，。、：；！？“”‘’（）《》〈〉「」『』【】—…·～
+- **汉字 11600 余个**：简体常用字、繁体字、日本新字体与部分部首部件；
+- **假名 177 个**：平假名、片假名（含小写假名、浊音、长音符）；
+- **西文**：ASCII 拉丁字母、数字、符号及其全角形式；
+- **中文标点**：，。、：；！？“”‘’（）《》〈〉「」『』【】—…·～
+- **竖排**：内置 `vert` / `vrt2` 特性与竖排度量，标点在竖排时自动换成竖排形式（︐︒︑︵︶﹁﹂︽︾ 等）；
+- **常用符号**：× ÷ ± ° ¥ • → ← ↑ ↓ 〇
 
-**已知不足**：没有假名、注音、谚文；没有竖排标点与 OpenType 特性；未做 hinting，小字号下细笔画偏淡，更适合标题与展示用途；西文较朴素；个别字的笔画衔接不够理想——欢迎提 Issue 附上具体的字。
+**已知不足**：没有注音、谚文；未做 hinting，小字号下细笔画偏淡，更适合标题与展示用途；竖排时小写假名、引号（“”）未做专门调整；西文骨架来自工程制图用的单线字体，比专业西文设计朴素；个别字的笔画衔接不够理想——欢迎提 Issue 附上具体的字。
 
 ## 构建
 
 ```bash
 pip install -r requirements.txt
-make data      # 获取笔画骨架数据（Make Me a Hanzi）
+make data      # 获取笔画骨架数据（Make Me a Hanzi、AnimCJK）
 make build     # 生成三个字重，输出到 fonts/
 ```
 
@@ -52,6 +55,7 @@ python3 sources/build.py Regular --only "永和九年"
 
 - 版式度量（字框、行高）参考了 [霞鹜文楷 LXGW WenKai](https://github.com/lxgw/LxgwWenKai)，以便与其混排；未使用其任何字形。
 - 汉字笔画骨架来自 [Make Me a Hanzi](https://github.com/skishore/makemeahanzi) 的 `graphics.txt`，该数据衍生自文鼎 PL 简中楷（Arphic PL KaitiM GB）与文鼎 PL 中楷（Arphic PL UKai）。
+- 假名、繁体字与日本汉字的骨架来自 [AnimCJK](https://github.com/parsimonhi/animCJK) 的 `graphics*.txt`（同样衍生自文鼎字体，以 Arphic Public License 发布）。同一个字在多份数据中出现时，优先用 Make Me a Hanzi 的版本。
 - 西文骨架来自 Hershey Simplex 单线字体（经由 [HersheyFonts](https://github.com/apshu/HersheyFonts)）。The Hershey Fonts were originally created by Dr. A. V. Hershey while working at the U.S. National Bureau of Standards.
 - 字形轮廓由本项目的程序生成，设计与程序由项目作者与 Claude（Anthropic）协作完成。
 
